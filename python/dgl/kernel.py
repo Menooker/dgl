@@ -3,6 +3,9 @@ from __future__ import absolute_import
 
 from ._ffi.function import _init_api
 from .ndarray import empty
+import dgl.kernel_tvm
+
+tvm_enabled = False
 
 # pylint: disable=invalid-name
 def infer_binary_feature_shape(op, lhs, rhs):
@@ -199,6 +202,11 @@ def backward_lhs_binary_op_reduce(
     out_rows : NDArray
         The rows written to output tensor.
     """
+    if tvm_enabled:
+        if reducer == 'none' and op == 'dot' and A_target == 0 and B_target == 1 and A_rows is None and B_rows is None and out_rows is None and len(B.shape)==2 and len(grad_out.shape)==1:
+            data, indecies, indptr = G.get_out_csr()
+            dgl.kernel_tvm.binary_op_dot_bwd_lhs(indecies, indptr, B, grad_out, data, grad_A)
+            return
     if A_rows is None:
         A_rows = empty([])
     if B_rows is None:
@@ -264,6 +272,12 @@ def backward_rhs_binary_op_reduce(
     out_rows : NDArray
         The rows written to output tensor.
     """
+    if tvm_enabled:
+        if reducer == 'none' and op == 'dot' and A_target == 0 and B_target == 1 and A_rows is None and B_rows is None and out_rows is None and len(B.shape)==2 and len(grad_out.shape)==1:
+            data, indecies, indptr = G.get_out_csr()
+            #print(A.shape, B.shape, out.shape, grad_out.shape, grad_A.shape)
+            dgl.kernel_tvm.binary_op_dot_bwd_rhs(indecies, indptr, A, grad_out, data, grad_B)
+            return
     if A_rows is None:
         A_rows = empty([])
     if B_rows is None:
@@ -363,6 +377,11 @@ def copy_reduce(reducer, G, target,
     out_mapping : NDArray
         The rows to write to output tensor.
     """
+    if tvm_enabled:
+        if reducer=="sum" and target == 0 and X_rows is None and out_rows is None:
+            data, indecies, indptr = G.get_out_csr()
+            dgl.kernel_tvm.copy_reduce_sum(indecies, indptr, X, out)
+            return
     if X_rows is None:
         X_rows = empty([])
     if out_rows is None:
@@ -405,6 +424,11 @@ def backward_copy_reduce(reducer, G, target,
     out_rows : NDArray
         The rows written to output tensor.
     """
+    if tvm_enabled:
+        if reducer=="sum" and target == 0 and X_rows is None and out_rows is None:
+            data, indecies, indptr = G.get_out_csr()
+            dgl.kernel_tvm.copy_reduce_sum_bwd(indecies, indptr, grad_out, grad_X)
+            return
     if X_rows is None:
         X_rows = empty([])
     if out_rows is None:

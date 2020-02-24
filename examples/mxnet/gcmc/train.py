@@ -12,6 +12,7 @@ from model import GCMCLayer, BiDecoder
 from utils import get_activation, parse_ctx, gluon_net_info, gluon_total_param_num, \
                   params_clip_global_norm, MetricLogger
 from mxnet.gluon import Block
+from dgl.kernel import tvm_enabled
 
 class Net(Block):
     def __init__(self, args, **kwargs):
@@ -225,7 +226,7 @@ def config():
 
     ### configure save_fir to save all the info
     if args.save_dir is None:
-        args.save_dir = args.data_name+"_" + ''.join(random.choices(string.ascii_uppercase + string.digits, k=2))
+        args.save_dir = args.data_name+"_" + ''.join(random.sample(string.ascii_uppercase + string.digits, k=2))
     if args.save_id is None:
         args.save_id = np.random.randint(20)
     args.save_dir = os.path.join("log", args.save_dir)

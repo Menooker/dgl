@@ -748,6 +748,10 @@ class HeteroGraphIndex(ObjectBase):
             return scipy.sparse.coo_matrix((data, (row, col)), shape=(nrows, ncols))
         else:
             raise Exception("unknown format")
+    
+    def get_out_csr(self):
+        csr = _CAPI_DGLHeteroGetOutCSRMatrix(self)
+        return (csr(0), csr(1), csr(2))
 
     def incidence_matrix(self, etype, typestr, ctx):
         """Return the incidence matrix representation of this graph.

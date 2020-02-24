@@ -2316,6 +2316,7 @@ class DGLHeteroGraph(object):
         apply_nodes
         group_apply_edges
         """
+
         etid = self.get_etype_id(etype)
         stid, dtid = self._graph.metagraph.find_edge(etid)
         if is_all(edges):

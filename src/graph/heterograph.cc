@@ -753,6 +753,16 @@ DGL_REGISTER_GLOBAL("heterograph_index._CAPI_DGLHeteroGetAdj")
         hg->GetAdj(etype, transpose, fmt));
   });
 
+DGL_REGISTER_GLOBAL("heterograph_index._CAPI_DGLHeteroGetOutCSRMatrix")
+.set_body([] (DGLArgs args, DGLRetValue* rv) {
+    HeteroGraphRef hg = args[0];
+    auto bgptr = std::dynamic_pointer_cast<UnitGraph>(hg.sptr());
+    CHECK_NOTNULL(bgptr);
+    auto csr = bgptr->GetOutCSRMatrix();
+    *rv = ConvertNDArrayVectorToPackedFunc(
+        std::vector<NDArray>{csr.data, csr.indices, csr.indptr});
+  });
+
 DGL_REGISTER_GLOBAL("heterograph_index._CAPI_DGLHeteroVertexSubgraph")
 .set_body([] (DGLArgs args, DGLRetValue* rv) {
     HeteroGraphRef hg = args[0];
