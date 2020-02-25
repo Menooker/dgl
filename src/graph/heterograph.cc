@@ -19,6 +19,8 @@
 // TODO(BarclayII): currently CompactGraphs depend on IdHashMap implementation which
 // only works on CPU.  Should fix later to make it device agnostic.
 #include "../array/cpu/array_utils.h"
+#include <dgl/immutable_graph.h>
+#include "unit_graph.h"
 
 using namespace dgl::runtime;
 
@@ -972,7 +974,7 @@ DGL_REGISTER_GLOBAL("heterograph_index._CAPI_DGLHeteroGetOutCSRMatrix")
     HeteroGraphRef hg = args[0];
     auto bgptr = std::dynamic_pointer_cast<UnitGraph>(hg.sptr());
     CHECK_NOTNULL(bgptr);
-    auto csr = bgptr->GetOutCSRMatrix();
+    auto csr = bgptr->GetCSRMatrix(0);
     *rv = ConvertNDArrayVectorToPackedFunc(
         std::vector<NDArray>{csr.data, csr.indices, csr.indptr});
   });

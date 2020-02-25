@@ -154,14 +154,14 @@ void BinaryReduceImpl(
   }
   const DLDataType& dtype = out_data->dtype;
   const auto bits = graph.NumBits();
-  if (XPU == kDLCPU) {
+  /*if (XPU == kDLCPU) {
     if (bits== 32 && reducer == binary_op::kReduceSum 
       && op == binary_op::kUseLhs && dtype.code==kDLFloat
       && dtype.bits==32 && lhs == binary_op::Target::kSrc){
         CopyReduceFloat(graph, lhs_data, out_data, lhs_mapping, out_mapping, x_len, false);
         return;
     }
-  }
+  }*/
   DGL_DTYPE_SWITCH(dtype, DType, {
     DGL_IDX_TYPE_SWITCH(bits, Idx, {
       REDUCER_SWITCH(reducer, XPU, DType, Reducer, {
@@ -323,7 +323,7 @@ void BackwardBinaryReduceImpl(
     // TODO(minjie): divide
     LOG(FATAL) << "reduce mean is not supported.";
   }
-  if (XPU == kDLCPU && bits== 32) {
+  /*if (XPU == kDLCPU && bits== 32) {
     if (reducer == binary_op::kReduceSum 
       && op == binary_op::kUseLhs && dtype.code==kDLFloat
       && dtype.bits==32 && lhs == binary_op::Target::kSrc){
@@ -347,7 +347,7 @@ void BackwardBinaryReduceImpl(
         //CopyReduceFloat(graph, grad_out_data, grad_lhs_data, out_mapping, lhs_mapping, x_len, true);
         //return;
     }
-  }
+  }*/
 
   DGL_DTYPE_SWITCH(dtype, DType, {
     DGL_IDX_TYPE_SWITCH(bits, Idx, {
