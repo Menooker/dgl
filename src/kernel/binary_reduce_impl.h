@@ -62,6 +62,63 @@ GData<Idx, DType> AllocGData(const std::string& op,
   return gdata;
 }
 
+inline int floor_div(int a, int b)
+{
+  return (a+b-1)/b;
+}
+
+__attribute__((optimize("unroll-loops")))
+inline void CopyReduceFloat(const CSRWrapper& graph,
+    runtime::NDArray lhs_data,
+    runtime::NDArray out_data,
+    runtime::NDArray lhs_mapping,
+    runtime::NDArray out_mapping,
+    int32_t x_len,
+    bool reverse)
+{
+      float* mylhs_data = static_cast<float*>(lhs_data->data);
+      float* myout_data = static_cast<float*>(out_data->data);
+      int32_t* mylhs_mapping = utils::IsNoneArray(lhs_mapping)? nullptr:static_cast<int32_t*>(lhs_mapping->data);
+      int32_t* myout_mapping =utils::IsNoneArray(out_mapping) ? nullptr: static_cast<int32_t*>(out_mapping->data);
+      assert(!mylhs_mapping);
+      assert(!myout_mapping);
+      memset(myout_data, 0, utils::NElements(out_data)* sizeof(float));
+      auto outcsr = graph.GetOutCSRMatrix();
+      // row_offsets ->indptr
+      typedef int32_t Idx;
+      int32_t N = outcsr.indptr->shape[0] - 1;
+      Idx* row_offsets = static_cast<Idx*>(outcsr.indptr->data);
+      Idx* column_indices = static_cast<Idx*>(outcsr.indices->data);
+      const int BLOCK_SIZE = 32;
+      const int total=floor_div(x_len, BLOCK_SIZE);
+      
+      #pragma omp parallel for
+      for(int t=0; t<total;t++)
+      { 
+        //Idx start = 0;
+        //Idx end = x_len;
+        for (Idx vid = 0; vid < N; ++vid) {
+            Idx start = BLOCK_SIZE*t;
+            Idx end = (t==total-1) ? x_len : BLOCK_SIZE*(t+1);
+            Idx src = vid;
+            const Idx row_start = row_offsets[src];
+            const Idx row_end = row_offsets[src + 1];
+            for (Idx eid = row_start; eid < row_end; ++eid) {
+              const Idx dst = column_indices[eid];
+              //Idx srcIdx = mylhs_mapping ?  mylhs_mapping[src]:src;
+              //Idx outIdx = myout_mapping ? myout_mapping[dst]:dst;
+              Idx srcIdx = reverse ? dst :src;
+              Idx outIdx = reverse ? src :dst;
+              for(Idx i=start;i<end;i++)
+              {
+                //#pragma omp atomic
+                myout_data[outIdx * x_len + i] += mylhs_data[srcIdx * x_len + i];
+              }
+            }
+        }
+      }
+}
+
 template <int XPU>
 void BinaryReduceImpl(
     const std::string& reducer,
@@ -97,6 +154,14 @@ void BinaryReduceImpl(
   }
   const DLDataType& dtype = out_data->dtype;
   const auto bits = graph.NumBits();
+  if (XPU == kDLCPU) {
+    if (bits== 32 && reducer == binary_op::kReduceSum 
+      && op == binary_op::kUseLhs && dtype.code==kDLFloat
+      && dtype.bits==32 && lhs == binary_op::Target::kSrc){
+        CopyReduceFloat(graph, lhs_data, out_data, lhs_mapping, out_mapping, x_len, false);
+        return;
+    }
+  }
   DGL_DTYPE_SWITCH(dtype, DType, {
     DGL_IDX_TYPE_SWITCH(bits, Idx, {
       REDUCER_SWITCH(reducer, XPU, DType, Reducer, {
@@ -162,6 +227,63 @@ BackwardGData<Idx, DType> AllocBackwardGData(
   return gdata;
 }
 
+// Left=Src Right=Dst
+__attribute__((optimize("unroll-loops")))
+inline void DotLeftBwdFloat(const CSRWrapper& graph,
+    runtime::NDArray rhs_data,
+    runtime::NDArray gradout_data,
+    runtime::NDArray lhsgradout_data,
+    runtime::NDArray lhs_mapping,
+    runtime::NDArray rhs_mapping,
+    int32_t x_len,
+    int32_t data_len,
+    bool reverse) {
+    
+      //the rhs_data feature is [x_len * data_len] matrix
+      float* myrhs_data = static_cast<float*>(rhs_data->data);
+      float* mygradout_data = static_cast<float*>(gradout_data->data);
+      float* mylhsgradout_data = static_cast<float*>(lhsgradout_data->data);
+      int32_t* mylhs_mapping = utils::IsNoneArray(lhs_mapping)? nullptr:static_cast<int32_t*>(lhs_mapping->data);
+      int32_t* myrhs_mapping = utils::IsNoneArray(rhs_mapping)? nullptr:static_cast<int32_t*>(rhs_mapping->data);
+      assert(!mylhs_mapping);
+      assert(!myrhs_mapping);
+      memset(mylhsgradout_data, 0, utils::NElements(lhsgradout_data)* sizeof(float));
+      auto outcsr = graph.GetOutCSRMatrix();
+      int32_t* myout_mapping = static_cast<int32_t*>(outcsr.data->data);
+      // row_offsets ->indptr
+      typedef int32_t Idx;
+      int32_t N = outcsr.indptr->shape[0] - 1;
+      Idx* row_offsets = static_cast<Idx*>(outcsr.indptr->data);
+      Idx* column_indices = static_cast<Idx*>(outcsr.indices->data);
+      
+      #pragma omp parallel for
+      for(Idx i=0;i<x_len;i++){
+        for (Idx vid = 0; vid < N; ++vid) {
+            Idx src = vid;
+            const Idx row_start = row_offsets[src];
+            const Idx row_end = row_offsets[src + 1];
+            for (Idx eid = row_start; eid < row_end; ++eid) {
+              const Idx dst = column_indices[eid];
+              const Idx outIdx = myout_mapping[eid];
+              //Idx srcIdx = mylhs_mapping ?  mylhs_mapping[src]:src;
+              //Idx outIdx = myout_mapping ? myout_mapping[dst]:dst;
+              Idx rIdx = reverse ? src:dst;
+              Idx lIdx = reverse ? dst:src;
+              float* out = mylhsgradout_data + lIdx * (x_len * data_len);
+              float* grads = mygradout_data + outIdx * (x_len);
+              float* rhs = myrhs_data + rIdx * (x_len * data_len);
+              {
+                float outgrad=grads[i];
+                for (Idx j=0;j<data_len;j++)
+                  out[i * data_len + j] += outgrad * rhs[i * data_len + j];
+              }
+            }
+        }
+      }
+      
+
+}
+
 template <int XPU>
 void BackwardBinaryReduceImpl(
     const std::string& reducer,
@@ -180,7 +302,6 @@ void BackwardBinaryReduceImpl(
 #endif
   // Graph
   const int64_t x_len = utils::ComputeXLength(out_data);
-
   // advance config
   minigun::advance::RuntimeConfig rtcfg;
   rtcfg.ctx = out_data->ctx;
@@ -202,6 +323,32 @@ void BackwardBinaryReduceImpl(
     // TODO(minjie): divide
     LOG(FATAL) << "reduce mean is not supported.";
   }
+  if (XPU == kDLCPU && bits== 32) {
+    if (reducer == binary_op::kReduceSum 
+      && op == binary_op::kUseLhs && dtype.code==kDLFloat
+      && dtype.bits==32 && lhs == binary_op::Target::kSrc){
+        CopyReduceFloat(graph, grad_out_data, grad_lhs_data, out_mapping, lhs_mapping, x_len, true);
+        return;
+    }
+    if (reducer == binary_op::kReduceNone 
+      && op == binary_op::kDot && dtype.code==kDLFloat
+      && dtype.bits==32 && lhs == binary_op::Target::kSrc
+      && rhs == binary_op::Target::kDst){
+        int32_t data_len = lhs_data->shape[lhs_data->ndim - 1];
+        if (req_lhs) {
+          DotLeftBwdFloat(graph, rhs_data, grad_out_data, grad_lhs_data, lhs_mapping, rhs_mapping, 
+            x_len, data_len, false);
+          return;
+        } else {
+          DotLeftBwdFloat(graph, lhs_data, grad_out_data, grad_rhs_data, rhs_mapping, lhs_mapping, 
+            x_len, data_len, true);
+          return;
+        }
+        //CopyReduceFloat(graph, grad_out_data, grad_lhs_data, out_mapping, lhs_mapping, x_len, true);
+        //return;
+    }
+  }
+
   DGL_DTYPE_SWITCH(dtype, DType, {
     DGL_IDX_TYPE_SWITCH(bits, Idx, {
       auto gdata = AllocBackwardGData<XPU, Idx, DType>(op,

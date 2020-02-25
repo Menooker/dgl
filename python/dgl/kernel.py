@@ -380,6 +380,7 @@ def copy_reduce(reducer, G, target,
     if tvm_enabled:
         if reducer=="sum" and target == 0 and X_rows is None and out_rows is None:
             data, indecies, indptr = G.get_out_csr()
+            #print("TVM ENABMED")
             dgl.kernel_tvm.copy_reduce_sum(indecies, indptr, X, out)
             return
     if X_rows is None:

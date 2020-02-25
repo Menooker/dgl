@@ -172,6 +172,16 @@ void CallBinaryReduce(const minigun::advance::RuntimeConfig& rtcfg,
         rtcfg, csr, gdata, minigun::IntArray1D<Idx>());
 }
 
+/*template <typename Idx, typename DType,
+          typename LeftSelector, typename RightSelector>
+void CallBinaryReduce<kDLCPU, Idx, DType, LeftSelector, RightSelector, BinaryUseLhs<DType>, ReduceNone<kDLCPU, DType>>(
+                      const minigun::advance::RuntimeConfig& rtcfg,
+                      const CSRWrapper& graph,
+                      GData<Idx, DType>* gdata) {
+  printf("IN!!!!\n");
+}*/
+
+
 // Template implementation of BinaryReduce broadcasting operator.
 template <int XPU, int NDim, typename Idx, typename DType,
           typename LeftSelector, typename RightSelector,

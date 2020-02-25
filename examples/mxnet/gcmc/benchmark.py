@@ -16,7 +16,8 @@ from collections import OrderedDict
 import dgl.ndarray as dglnd
 from dgl.heterograph import AdaptedHeteroGraph
 import dgl.runtime.spmv as spmv
-from dgl.kernel import tvm_enabled
+#from dgl.kernel import tvm_enabled
+import dgl.kernel
 
 def zerocopy_to_dgl_ndarray(arr):
     return dglnd.from_dlpack(arr.to_dlpack_for_read())
@@ -28,8 +29,8 @@ class MyContext:
         self.device_type =1
         self.device_id=0
 def train(args):
-    print(args.ctx)
-    print(args)
+    #print(args.ctx)
+    #print(args)
     dataset = MovieLens(args.data_name, args.ctx, use_one_hot_fea=args.use_one_hot_fea, symm=args.gcn_agg_norm_symm,
                         test_ratio=args.data_test_ratio, valid_ratio=args.data_valid_ratio)
     print("Loading data finished ...\n")
@@ -38,27 +39,30 @@ def train(args):
     movie_in_unit = dataset.movie_feature_shape[1]
     users_in_unit = dataset.user_feature_shape[1]
     print((movie_in_unit, users_in_unit, msg_in_unit))
-    allfeat = [mx.ndarray.random.randn(movie_in_unit, msg_in_unit,dtype=np.float32) for i in dataset.possible_rating_values]
     num_u = graph.number_of_nodes('user')
     
-    tvm_enabled = args.tvm != 0 
-
-    def do_copy_reduce():
-        funcs=OrderedDict()
-        for i, rating in enumerate(dataset.possible_rating_values):
-            rating = str(rating)
-            graph.nodes['movie'].data['h%d' % i] = allfeat[i]
-            #funcs[rating] = (fn.copy_u('h%d' % i, 'm'), fn.sum('m', 'h'))
-            funcs['rev-%s' % rating] = (fn.copy_u('h%d' % i, 'm'), fn.sum('m', 'h'))
-            # message passing
-        graph.multi_update_all(funcs, "stack")
-        #graph.nodes['user'].data.pop('h')
-        return graph.nodes['user'].data.pop('h').reshape(num_u, -1)
+    dgl.kernel.tvm_enabled = args.tvm != 0 
+    print("TVM enabled?", dgl.kernel.tvm_enabled)
+    def get_copy_reduce():
+        allfeat = [mx.ndarray.random.randn(movie_in_unit, msg_in_unit,dtype=np.float32) for i in dataset.possible_rating_values]
+        def do_copy_reduce():
+            funcs=OrderedDict()
+            for i, rating in enumerate(dataset.possible_rating_values):
+                rating = str(rating)
+                graph.nodes['movie'].data['h%d' % i] = allfeat[i]
+                #funcs[rating] = (fn.copy_u('h%d' % i, 'm'), fn.sum('m', 'h'))
+                funcs['rev-%s' % rating] = (fn.copy_u('h%d' % i, 'm'), fn.sum('m', 'h'))
+                # message passing
+            graph.multi_update_all(funcs, "stack")
+            #graph.nodes['user'].data.pop('h')
+            return graph.nodes['user'].data.pop('h').reshape(num_u, -1)
+        return do_copy_reduce
         #mx.nd.save()
     #time.sleep(20)
     #(943, 75) (1682, 75) (72000,) (72000,) (943, 75)
-    def do_copy_reduce_bwd():
-        X = zerocopy_to_dgl_ndarray(allfeat[0])
+    def get_copy_reduce_bwd():
+        x_mx = mx.ndarray.random.randn(movie_in_unit, msg_in_unit,dtype=np.float32)
+        X = zerocopy_to_dgl_ndarray(x_mx)
         import dgl
         out = dgl.ndarray.empty((users_in_unit, msg_in_unit))
         grad_out = zerocopy_to_dgl_ndarray(mx.ndarray.random.randn(users_in_unit, msg_in_unit,dtype=np.float32))
@@ -67,18 +71,19 @@ def train(args):
         etid = graph.get_etype_id('rev-1')
         stid, dtid = getattr(graph,"_graph").metagraph.find_edge(etid)
         gidx=AdaptedHeteroGraph(graph, stid, dtid, etid).get_immutable_gidx(MyContext())
-        print(type(grad_out))
-        dgl.kernel.backward_copy_reduce("sum", gidx, 0, X, out, grad_out, grad_x)
-        print(outgrad_x.shape)
-        return outgrad_x
+        print(grad_out.shape)
+        def do_copy_reduce_bwd():
+            dgl.kernel.backward_copy_reduce("sum", gidx, 0, X, out, grad_out, grad_x)
+            return outgrad_x
+        return do_copy_reduce_bwd
 
-    dot_lhs = mx.ndarray.random.randn(users_in_unit, 75,dtype=np.float32)
-    dot_rhs = mx.ndarray.random.randn(movie_in_unit, 75,dtype=np.float32)
-    dot_out = mx.ndarray.random.randn(72000,dtype=np.float32)
-    dot_outgrad = mx.ndarray.random.randn(72000,dtype=np.float32)
-    dot_lhsgrad = mx.ndarray.zeros((users_in_unit, 75),dtype=np.float32)
-    dot_rhsgrad = mx.ndarray.zeros((movie_in_unit, 75),dtype=np.float32)
-    def do_binary_op_dot_bwd(islhs):
+    def get_binary_op_dot_bwd(islhs):
+        dot_lhs = mx.ndarray.random.randn(users_in_unit, 75,dtype=np.float32)
+        dot_rhs = mx.ndarray.random.randn(movie_in_unit, 75,dtype=np.float32)
+        dot_out = mx.ndarray.random.randn(45450,dtype=np.float32)
+        dot_outgrad = mx.ndarray.random.randn(45450,dtype=np.float32)
+        dot_lhsgrad = mx.ndarray.zeros((users_in_unit, 75),dtype=np.float32)
+        dot_rhsgrad = mx.ndarray.zeros((movie_in_unit, 75),dtype=np.float32)
         import dgl
         A = zerocopy_to_dgl_ndarray(dot_lhs)
         B = zerocopy_to_dgl_ndarray(dot_rhs)
@@ -89,26 +94,31 @@ def train(args):
         etid = 0
         stid, dtid = getattr(G,"_graph").metagraph.find_edge(etid)
         gidx=AdaptedHeteroGraph(graph, stid, dtid, etid).get_immutable_gidx(MyContext())
-        if islhs:
-            grad_A = zerocopy_to_dgl_ndarray_for_write(dot_lhsgrad)
-            dgl.kernel.backward_lhs_binary_op_reduce("none", "dot", gidx, 0, 1, A, B, out, grad_out, grad_A)
-            return dot_lhsgrad
-        else:
-            grad_B = zerocopy_to_dgl_ndarray_for_write(dot_rhsgrad)
-            dgl.kernel.backward_rhs_binary_op_reduce("none", "dot", gidx, 0, 1, A, B, out, grad_out, grad_B)
-            return dot_rhsgrad
+        def do_binary_op_dot_bwd():
+            if islhs:
+                grad_A = zerocopy_to_dgl_ndarray_for_write(dot_lhsgrad)
+                dgl.kernel.backward_lhs_binary_op_reduce("none", "dot", gidx, 0, 1, A, B, out, grad_out, grad_A)
+                return dot_lhsgrad
+            else:
+                grad_B = zerocopy_to_dgl_ndarray_for_write(dot_rhsgrad)
+                dgl.kernel.backward_rhs_binary_op_reduce("none", "dot", gidx, 0, 1, A, B, out, grad_out, grad_B)
+                return dot_rhsgrad
+        return do_binary_op_dot_bwd
                 
 
     workloads = {
-        'copyreduce': do_copy_reduce,
-        'copyreduce_bwd': do_copy_reduce_bwd,
-        'binary_dot_bwd_lhs': lambda:do_binary_op_dot_bwd(True),
-        'binary_dot_bwd_rhs': lambda:do_binary_op_dot_bwd(False),
+        'copyreduce': (get_copy_reduce, 100),
+        'copyreduce_bwd': (get_copy_reduce_bwd, 10000),
+        'binary_dot_bwd_lhs': (lambda:get_binary_op_dot_bwd(True),10000),
+        'binary_dot_bwd_rhs': (lambda:get_binary_op_dot_bwd(False), 10000),
     }
+    workload = workloads[args.workload][0]
+    times = workloads[args.workload][1]
     if args.mode == "save":
-        mx.nd.save(args.workload + ".mxnd",workloads[args.workload]())
+        ret=workload()()
+        mx.nd.save(args.workload + ".mxnd",ret)
     elif args.mode == "compare":
-        r = workloads[args.workload]()
+        r = workload()()
         loaded = mx.nd.load(args.workload + ".mxnd")[0]
         print(loaded)
         print(r.shape, loaded.shape)
@@ -121,11 +131,12 @@ def train(args):
                 if abs((r-l)/ (r+l + 1e-11)) > 1e-3:
                     print(idx, j, r, l)
     else:
+        workload = workload()
         for i in range(3):
-            do_copy_reduce()
+            workload()
         t0 = time.time()
-        for i in range(200):
-            do_copy_reduce()
+        for i in range(times):
+            workload()
         print(time.time()-t0)
         print("DONE")
 
