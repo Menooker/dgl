@@ -10,6 +10,9 @@ dtype = "float32"
 # To get the best performance, please change the following line
 # to llvm -mcpu=core-avx2, or specific type of CPU you use
 target = 'llvm -mcpu=core-avx2'
+#avx2-> len(ymm)=256 -> 8 floats
+#avx512-> len(zmm)=512 -> 16 floats
+simd_size = 8 
 ctx = tvm.context(target, 0)
 
 def gen_csr_iterate(irb: tvm.ir_builder.IRBuilder, indices, indptr, parallel, functor, **buffers):
@@ -44,7 +47,7 @@ def gen_vectorized_for_loop(irb, length, blkSize, fcompute):
         with irb.for_range(0, blkSize, name='v.inner', for_type="vectorize") as inner: #
             fcompute(outer * blkSize + inner)
     with irb.for_range(0, tvm.floormod(length, blkSize), name='v') as i:
-            fcompute(i)
+            fcompute(length - tvm.floormod(length, blkSize) + i)
     '''with irb.for_range(0, length, name='v') as i:
             fcompute(i)'''
 
@@ -74,13 +77,12 @@ def gen_copy_reduce_sum(isfwd):
                             outptr[src * x_len_s + blkIdx * block_size + i] += inptr[dst * x_len_s + blkIdx * block_size + i]
             gen_csr_iterate(irb, ins[0], ins[1], False, workload, inptr = ins[2])'''
         def for_each_edge(irb, src, dst, eid, inptr):
-            blkSize=8
             def assign(idx):
                 if isfwd:
                     outptr[dst * x_len_s + idx] += inptr[src * x_len_s + idx]
                 else:
                     outptr[src * x_len_s + idx] += inptr[dst * x_len_s + idx]
-            gen_vectorized_for_loop(irb, x_len_s, blkSize, assign)               
+            gen_vectorized_for_loop(irb, x_len_s, simd_size, assign)               
         gen_csr_iterate(irb, ins[0], ins[1], not isfwd, for_each_edge, inptr = ins[2])
         '''def workload(irb, src, dst, eid, inptr):
             blkSize=16
@@ -139,7 +141,7 @@ def gen_binary_op_dot_bwd_lhs(islhs):
                         lhsgradoutDataPtr[lhsIdx + j] += grad * rhsDataPtr[rhsIdx +j]
                     else:
                         lhsgradoutDataPtr[rhsIdx + j] += grad * rhsDataPtr[lhsIdx +j]
-            gen_vectorized_for_loop(irb, dataLen, 8, fcompute)
+            gen_vectorized_for_loop(irb, dataLen, simd_size, fcompute)
         gen_csr_iterate(irb, indices, indptr, islhs, for_each_edge, rhsDataPtr = rhsData, gradoutDataPtr = gradoutData, lhsgradoutDataPtr= outs[0], outMappingPtr = outMapping )
         return irb.get()
     #outbuf = tvm.placeholder((outN, x_len), name='outbuf')

@@ -12,7 +12,9 @@ from model import GCMCLayer, BiDecoder
 from utils import get_activation, parse_ctx, gluon_net_info, gluon_total_param_num, \
                   params_clip_global_norm, MetricLogger
 from mxnet.gluon import Block
-from dgl.kernel import tvm_enabled
+import dgl
+
+dgl.kernel.tvm_enabled=True
 
 class Net(Block):
     def __init__(self, args, **kwargs):
