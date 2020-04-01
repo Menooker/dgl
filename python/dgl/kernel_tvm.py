@@ -9,10 +9,10 @@ dtype = "float32"
 # using Intel AVX2(Advanced Vector Extensions) ISA for SIMD
 # To get the best performance, please change the following line
 # to llvm -mcpu=core-avx2, or specific type of CPU you use
-target = 'llvm -mcpu=core-avx2'
+target = 'llvm -mcpu=skylake-avx512'#'llvm -mcpu=core-avx2'
 #avx2-> len(ymm)=256 -> 8 floats
 #avx512-> len(zmm)=512 -> 16 floats
-simd_size = 8 
+simd_size = 16 
 ctx = tvm.context(target, 0)
 
 def gen_csr_iterate(irb: tvm.ir_builder.IRBuilder, indices, indptr, parallel, functor, **buffers):
